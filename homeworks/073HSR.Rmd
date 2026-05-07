@@ -1,0 +1,175 @@
+---
+title: "073HSR"
+output: html_document
+date: "2026-05-07"
+---
+文献信息
+标题：The Interactive Effects of Ambivalence and Certainty on Political Opinion Stability
+作者：Andrew Luttrell, Richard E. Petty, Pablo Briñol, Benjamin C. Wagner
+年份：2016
+期刊：Journal of Experimental Social Psychology
+Paper ID：rjb
+OSF 项目地址：https://osf.io/e7zb2/
+1. 研究内容简要概括
+该研究探讨了态度矛盾性（对同一事物的正面和负面评价并存）与态度确定性（个体对自己态度的确信程度）如何共同影响政治观点的稳定性。核心假设是：当人们的态度矛盾性较高时，确定性对观点稳定性的促进作用会减弱甚至逆转。研究通过实验操纵或测量矛盾性与确定性，并追踪政治观点随时间的变化（或抵制说服的程度），检验二者的交互效应。
+
+2.复现环境搭建
+R 环境配置：在 RStudio 中新建项目，将 OSF 下载的代码和数据文件放入项目根目录。
+安装所需包：检查分析脚本中 library() 或 require() 调用了哪些包（常见的有 psych、ggplot2、lmtest、interactions 等），预先安装。
+数据格式转换：如果原始数据为 SPSS 格式（.sav），使用 haven::read_sav() 导入；若为 CSV，则用 read.csv()。
+
+安装包
+```{r setup, include=FALSE}
+# 安装包（如未安装请先运行）
+install.packages(c("tidyverse", "psych", "interactions", "ggplot2", "haven"))
+library(tidyverse)
+library(psych)
+library(interactions)
+library(ggplot2)
+library(haven)
+```
+
+数据读取
+```{r cars}
+# 读取数据 (CSV)
+df1 <- read.csv("study1_data.csv", stringsAsFactors = FALSE)
+
+# 若为 SPSS 格式 (.sav) 则使用 haven::read_sav()
+# df1 <- haven::read_sav("study1_data.sav")
+```
+
+
+数据清洗
+```{r pressure, echo=FALSE}
+# 假设各题项列名为 A1, A2, ..., C1, C2, ...，请根据实际列名修改
+
+# 反向计分函数（假设量表为 1-7 点）
+reverse_score <- function(x, max = 7, min = 1) {
+  (max + min) - x
+}
+
+# 对矛盾性量表进行反向计分
+# 假设反向题为 A2, A5
+df1 <- df1 %>%
+  mutate(
+    A2_r = reverse_score(A2),
+    A5_r = reverse_score(A5)
+  )
+
+# 计算矛盾性均值（反向题已替换）
+amb_items <- c("A1", "A2_r", "A3", "A4", "A5_r", "A6")
+df1$ambivalence <- rowMeans(df1[, amb_items], na.rm = TRUE)
+
+# 确定性直接取均值（假设无反向）
+cert_items <- c("C1", "C2", "C3", "C4")
+df1$certainty <- rowMeans(df1[, cert_items], na.rm = TRUE)
+
+# 检查缺失值，如有必要可进行多重插补或直接剔除
+df1 <- df1[complete.cases(df1[, c("ambivalence", "certainty", "stability")]), ]
+```
+
+描述统计
+```{r pressure, echo=FALSE}
+# 选择关键变量计算均值、标准差
+desc_stats <- df1 %>%
+  select(ambivalence, certainty, stability) %>%
+  describe() %>%
+  select(mean, sd, min, max, n)
+
+print(desc_stats)
+
+cor_matrix <- cor(df1[, c("ambivalence", "certainty", "stability")], use = "pairwise")
+print(cor_matrix)
+```
+
+
+交互效应回归
+```{r pressure, echo=FALSE}
+# 中心化
+df1 <- df1 %>%
+  mutate(
+    c_ambiv = scale(ambivalence, scale = FALSE),
+    c_cert  = scale(certainty, scale = FALSE)
+  )
+
+# 拟合模型
+model1 <- lm(stability ~ c_ambiv * c_cert, data = df1)
+summary(model1)
+
+# 使用 interactions 包中的 sim_slopes 函数
+sim_slopes(model1, pred = c_cert, modx = c_ambiv,
+           johnson_neyman = FALSE)  # 若样本较小可关闭 J-N
+
+# 若想自定义条件值（例如 16th, 50th, 84th 百分位数或 ±1 SD）
+sim_slopes(model1, pred = c_cert, modx = c_ambiv,
+           cond_x = c("Low" = -1, "Mean" = 0, "High" = 1))  # 需先确保变量已标准化
+```
+
+可视化
+```{r pressure, echo=FALSE}
+#
+interact_plot(model1, pred = c_cert, modx = c_ambiv,
+              plot.points = TRUE,
+              modx.values = "plus-minus", # ±1 SD
+              x.label = "Certainty (centered)",
+              y.label = "Political Opinion Stability",
+              legend.main = "Ambivalence")
+
+ggsave("study1_interaction.pdf", width = 6, height = 5)
+```
+
+构建 Shiny App 复现报告
+```{r pressure, echo=FALSE}
+library(shiny)
+library(ggplot2)
+library(interactions)
+
+ui <- fluidPage(
+  titlePanel("Luttrell et al. (2016) Replication"),
+  sidebarLayout(
+    sidebarPanel(
+      selectInput("study", "Select Study:", choices = c("Study 1", "Study 2")),
+      hr(),
+      p("Interactive effects of ambivalence and certainty on political opinion stability.")
+    ),
+    mainPanel(
+      tabsetPanel(
+        tabPanel("Descriptives", verbatimTextOutput("desc")),
+        tabPanel("Regression Output", verbatimTextOutput("reg")),
+        tabPanel("Interaction Plot", plotOutput("plot"))
+      )
+    )
+  )
+)
+
+server <- function(input, output) {
+  data <- reactive({
+    if (input$study == "Study 1") {
+      df1
+    } else {
+      df2  # 需事先载入的另一个数据集
+    }
+  })
+  
+  model <- reactive({
+    lm(stability ~ c_ambiv * c_cert, data = data())
+  })
+  
+  output$desc <- renderPrint({
+    psych::describe(data()[, c("ambivalence", "certainty", "stability")])
+  })
+  
+  output$reg <- renderPrint({
+    summary(model())
+  })
+  
+  output$plot <- renderPlot({
+    interact_plot(model(), pred = c_cert, modx = c_ambiv,
+                  plot.points = TRUE, modx.values = "plus-minus")
+  })
+}
+
+shinyApp(ui, server)
+```
+
+
